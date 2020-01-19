@@ -1,0 +1,429 @@
+---
+title: "Data mining de los datos de AirBnb en la ciudad de Nueva York con R"
+author: "Pablo Román Capeáns"
+date: "13 de diciembre de 2019"
+output:
+  html_document:
+    toc: yes
+    theme: cosmo
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+---
+
+![New York](capturas/newyork1.jpg)
+
+# Resumen
+
+Airbnb es una empresa que desde el año 2008 ofrece una plataforma de software dedicada a la oferta de alojamientos a particulares y turístas mediante la cual los anfitriones pueden publicitar y contratar el arriendo de sus propiedades con sus huéspedes
+
+El objetivo principal es analizar con R la relación entre la variable precios (price) de los alojamientos y las restantes variables que marcan las características de los mismos en  Nueva York. Todos los millones de datos generados por Airbnb pueden ser usados para decisiones de negocio, comprender el comportamiento de los anfitriones y de los huespedes, realizar iniciativas de marketing, implementar la innovación de servicicios adicionales, etc.
+
+# Objetivo principal
+
+El objetivo de este proyecto es extraer la información de precios  de Airbnb en Nuva York. Los resultados de la exploración podrían facilitar conocimientos útiles para los anfitriones que buscan un precio competitivo y hacen que su listado se destaque.
+
+# Fuente de los datos
+
+1-La investigación solo incorporó datos de "AirBnb_NY.csv", muestreando a aquellos anfitriones que ofertan sus hogares en Nueva York.
+
+2-El conjunto de datos tiene 48895 observaciones distribuidas en 16 variables que son una mezcla de valores categóricos y numéricos.
+
+# Preparación de los datos
+
+## Librerias necesarias
+
+```{r warning = FALSE, message= FALSE}
+library(corrplot)
+library(psych)
+library(data.table)
+library(tidyr)
+library(plotly)
+library(ggridges)
+library(hrbrthemes)
+library(viridis)
+library(plyr)
+library(ggmap)
+library(ggplot2)
+library(ggpubr)
+library(mice)
+library(survey)
+library(sampling)
+library(survey)
+library(naniar)
+library(VIM)
+library(tidyverse)
+library(ggthemes)
+library(GGally)
+library(ggExtra)
+library(caret)
+library(corrplot)
+library(leaflet)
+library(kableExtra)
+library(RColorBrewer)
+library(plotly)
+th <- theme_fivethirtyeight() + theme(axis.title = element_text(), axis.title.x = element_text()) # global theme for ggplot2 objects
+```
+
+## Importación de los datos
+
+Procedemos a la importación del conjunto de datos, observamos el contenido y las dimensiones del mismo.
+
+```{r}
+nydf <- read.csv("AirBnB_NYCity_2019.csv")
+head(nydf) %>% kable() %>% kable_styling()
+dim(nydf)
+```
+
+```{r}
+names(nydf)
+```
+
+Podemos ver la estructura del dataframe de una manera más detallada e intuitiva:
+
+```{r}
+glimpse(nydf)
+```
+
+
+
+## Valores perdidos o missing data
+
+Una opción sencilla de ver los valores perdido es recurriendo a un resumen de los estadísticos descriptivos de las variables en el podemos observar que en las variables last_review  y  reviews_per_month aparecen un total de 10052 observaciones en blanco o NA.
+
+```{r}
+summary(nydf)
+```
+
+```{r}
+ggplot(nydf, aes(x=price)) + 
+  geom_histogram(fill="blue", binwidth = 10)
+head(table(nydf$price))
+```
+
+Podemos eliminar las observaciones iguales a 0 ya que son datos erroneos
+
+```{r}
+nydf = nydf[!nydf$price==0,]
+head(table(nydf$price))
+```
+
+
+Vemos cuáles son las variables numericas y creamos una matriz de correlaciones
+
+```{r}
+numericVars <- which(sapply(nydf,is.numeric))
+numericVars
+nydf_numVar <- nydf[, numericVars]
+cor_numVar <- cor(nydf_numVar, use="pairwise.complete.obs")
+cor_sorted <- as.matrix(sort(cor_numVar[,'price'], decreasing = TRUE))
+print(cor_sorted)
+CorHigh <- names(which(apply(cor_sorted, 1, function(x) abs(x)>0.05)))
+cor_numVar <- cor_numVar[CorHigh, CorHigh]
+corrplot.mixed(cor_numVar, tl.col="black", tl.pos = "lt")
+```
+
+Si queremos ver el efecto de ciertas variables la mayoria categoricas en relación con el precio
+
+```{r}
+ggplot(data=nydf, aes(x=factor(neighbourhood_group), y=price))+
+  geom_boxplot(col='blue') + labs(x='neighbourhood_group	')
+```
+
+```{r}
+ggplot(data=nydf, aes(x=factor(room_type), y=price))+
+  geom_boxplot(col='blue') + labs(x='room_type')
+```
+
+
+
+
+Box plot variable para usarse con variables categoricas 
+
+```{r}
+box = geom_boxplot(varwidth=T, fill="longitude")
+```
+
+Scatter plot para las continuas
+
+```{r}
+scatter = geom_point(color="longitude")
+```
+
+Creamos un df temporal para visualizar el análisis de los datos
+
+```{r}
+nydf_temp = nydf[!is.na(nydf$price),]
+```
+
+Los siguientes muestran un impacto visible y serán explorados a continuación
+
+```{r}
+p <- ggplot(nydf_temp, aes(x=availability_365, y=price, color=calculated_host_listings_count)) + 
+  geom_point()+
+  geom_smooth(method=lm, se=FALSE, fullrange=TRUE)+
+  labs(title="Miles per gallon \n according to the weight",
+       x="Weight (lb/1000)", y = "Miles/(US) gallon")
+p + theme_classic()
+
+ggplot(nydf_temp, aes(x=longitude, y=price, color=neighbourhood_group)) +
+  geom_point() + geom_rug()
+ggplot(nydf_temp, aes( room_type, price)) + geom_jitter(aes(colour = neighbourhood_group))
+```
+
+Descartamos las variables visiblemente insignificantes basadas en la selección manual de funciones
+
+```{r}
+nydfnew = subset(nydf,select = -c(id	,name,	host_id,	host_name,	neighbourhood_group	,neighbourhood,	latitude,	room_type	, 	minimum_nights,last_review	,reviews_per_month))
+```
+
+
+Otra forma de identificar los valores pérdidos y que los detecte el programa (ya que los que están en blanco no los considera NA serían ejecutar la siguiente asignación)
+
+```{r}
+nydf[nydf == '' | nydf == 'NA'] <- NA
+colSums(is.na(nydf))
+```
+
+```{r}
+gg_miss_var(nydf)
+```
+
+```{r warning= FALSE}
+aggr_plot <- aggr(nydf, col=c('navyblue','red'), numbers=TRUE, sortVars=TRUE, labels=names(nydf), cex.axis=.7, gap=3, ylab=c("Histograma de valores perdidos ","Patrón"))
+```
+
+
+## Imputación de los valores perdidos
+
+El gráfico anterior nos ayuda a comprender que casi el 80% de la muestra no tiene información perdida, algo más del 20% es información perdida.
+En nuestro caso, los datos faltantes que se observan no necesitan demasiado tratamiento especial. Analizando la naturaleza de nuestro conjunto de datos, podemos establecer más cosas: las columnas "nombre" y "nombre_host" son irrelevantes e insignificantes para nuestro análisis de datos, las columnas "last_review" y "review_per_month" necesitan un manejo muy simple. Para elaborar, "last_review" es fecha; si no hubo revisiones para el listado, la fecha simplemente no existirá. En nuestro caso, esta columna es irrelevante e insignificante, por lo tanto, no es necesario agregar esos valores. Para la columna "review_per_month" simplemente podemos agregarlo con 0.0 para valores faltantes; podemos ver que en "number_of_review" esa columna tendrá un 0, por lo tanto, siguiendo esta lógica con 0 revisiones totales, habrá 0.0 tasa de revisiones por mes. Por lo tanto, lo que se podría hacer (opcional) es eliminar las columnas que no son importantes. No consideramos en ningún caso imputar los valores perdidos
+
+
+# Exploración y Visualización de los datos
+
+## Distribución de los precios
+
+En primer lugar, veamos la distribución de los precios para todo el conjunto de datos.
+
+```{r}
+ggplot(nydf, aes(x = price)) +
+        geom_histogram(aes(y = ..density..), 
+                       binwidth = 30, color = "grey30", fill = "blue") +
+        geom_density(alpha = .2, fill = "antiquewhite3")
+```
+
+Parece que hay algunos valores atípicos en el extremo superior. Los precios oscilan entre 0 $ y 10000 $ con un valor medio de  152  $ y una desviación estándar de $ 240.15
+
+```{r}
+describe(nydf$price)
+```
+
+
+```{r}
+data <-as.data.frame(head(nydf[order(nydf$number_of_reviews,decreasing= TRUE),c(3,12)],5))
+c2 <- rainbow(5, alpha=0.4)
+names <- rownames(data)
+barplot(height=data$number_of_reviews,names= names,
+        horiz=F,col=c2,border="red",xlab="id" ,ylab="number of reviews"
+        )
+```
+
+El primer objeto tiene más de 600 consultas
+
+## Precios por áreas de vecindario
+
+Aplicamos como parámetro la mediana al logaritmo del precio y como podemos observar el vecindario si es importante en el nivel de precios siendo Manhattan el que tiene los mayores precios
+
+```{r}
+log_price <- log(nydf$price)
+nydf$log_price <- log_price
+
+nydf %>% group_by(neighbourhood_group) %>% summarise(Avg_log_price = median(log_price,na.rm=T)) %>%
+  ggplot(aes(x = neighbourhood_group, y = Avg_log_price, fill = neighbourhood_group))+geom_bar(stat="identity") + 
+  labs(title = "Diagrama de barras",
+       subtitle = "Grupo de vecindario and Mediana del logaritmo del Precio",
+       caption = "Fuente = Airbnb Data",
+       x = "Grupo de vecindario",
+       y = "Mediana logaritmo del precio")
+```
+
+
+## Localización geográfica por tipo de propiedad y precio
+
+A continuación vamos a realizar un scatter plot (diagrama de dispersión) basado en atributos espaciales de los hosts de Airbnb; los puntos más grandes representan el precio de cotización más alto. El precio baja cuando la ubicación de las casas está lejos del centro de New York, especialmente para el tipo de habitación compartida.
+
+```{r}
+price_geo <- data.frame("Longitude" = nydf$longitude,
+                        "Latitude" = nydf$latitude,
+                        "Room type" = nydf$room_type,
+                        "Log Price" = nydf$log_price)
+est.1 <- strata(price_geo, stratanames = c("Room.type"), 
+               size = rep(40,3), method = "srswor", 
+               description = TRUE)
+```
+
+```{r}
+sample1 <- getdata(price_geo, est.1)
+
+gg <- ggplot(sample1, aes(x = Longitude, y = Latitude)) + 
+  geom_point(aes(col = Room.type, size = Log.Price)) + 
+  xlim(c(-73.5, -74.25)) + 
+  ylim(c(40.5, 40.9)) + 
+  labs(title = "Scatter Plot",
+       subtitle =" Localización geográfica del log_price y room_type", 
+       x = "Longitud",
+       y = "Latitud",
+       caption = "Fuente: Airbnb")
+gg
+```
+
+
+## Precio
+
+Estamos observando que no utilizamos la variable precio directamente sino el logaritmo de esta. La ventaja de aplicar logaritmos sobre la variable dependiente, es su habilidad para acotar el rango de la variable en una cantidad más pequeña que la original. Este efecto reduce la sensibilidad de las estimaciones a las observaciones extremas o atípicas, tanto de las variables independientes como las dependientes.La principal característica que buscamos de las variables para que podamos aplicar los logaritmos es que sean cantidades estrictamente positivas. A continuación vamos a observar el histograma de la variable precios en su versión normal y en su versión logarítmica. 
+
+### Histograma y densidad de la variable precio
+
+
+```{r}
+ggplot(nydf, aes(x = price)) +
+        geom_histogram(bins = 30, aes(y = ..density..)
+                       , color = "grey30", fill = "white") +
+        geom_density(alpha = .2, fill = "antiquewhite3") +
+  th + 
+  ggtitle("Distribución del precio",
+          subtitle = "La distribución tiene mucha curtosis") +
+  theme(axis.title = element_text(), axis.title.x = element_text()) 
+```
+
+### Histograma y densidad de la variable logaritmo del precio
+
+```{r warning= FALSE}
+ggplot(nydf, aes(x = nydf$log_price)) +
+        geom_histogram(bins = 30, aes(y = ..density..)
+                       , color = "grey30", fill = "white") +
+        geom_density(alpha = .2, fill = "antiquewhite3") +
+  th + 
+  ggtitle("Logaritmo del Precio",
+          subtitle = expression("Con"~ "una transformación de" ~'log'[10]~"en el eje x" )) +
+  #theme(axis.title = element_text(), axis.title.x = element_text()) +
+  scale_x_log10()
+```
+
+### Densidad del logaritmo del precio para las distintas áreas del vecindario
+
+La ciudad de Nueva York tiene 5 áreas de vecindario:
+
+- Manhattan
+- Brooklyn
+- Queens
+- Bronx
+- Staten Island
+
+```{r}
+lprice <-ifelse(is.infinite(log_price),0,log_price)
+ggplot(nydf, aes(x = lprice, y = neighbourhood_group, fill = ..x..)) +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01) +
+  scale_fill_viridis(name = "log.prices", option = "C") +
+  labs(title = 'log.precios en zonas de Nueva York')
+```
+
+### Numero de propiedades por áreas de vecindario
+
+```{r}
+nydf %>% group_by(neighbourhood_group) %>% tally() %>% 
+  ggplot(aes(x = reorder(neighbourhood_group, n), n)) +
+  geom_bar(stat = "identity", fill = "blue") +
+  theme_fivethirtyeight() +
+  ggtitle("Número de propiedades por zonas de vecindario") +
+  geom_text(aes(x = neighbourhood_group, y = 1, label = paste0(n),
+                colour = ifelse(neighbourhood_group %in%
+                                                              c("Manhattan", "Brooklyn", 
+                                                                "Queens"), '1', '2')),
+            hjust=-1.5, vjust=.5, size = 4, 
+            fontface = 'bold') +
+  coord_flip() +
+  scale_color_manual(values=c("white","black"), guide = F)
+```
+
+
+### Boxplot del logaritmo del precio por área de vecindario
+
+```{r warning= FALSE}
+  ggplot(nydf,aes(x = neighbourhood_group, y = lprice, fill = lprice)) +
+    geom_boxplot() +
+    scale_fill_viridis(discrete = FALSE, alpha=0.6) +
+    geom_jitter(color="black", size=0.4, alpha=0.9) +
+    theme_ipsum() +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    ggtitle("Box plot log.price por zonas") + xlab("")
+```
+
+### Box plot del logartimo del precio por tipo de habitación
+
+En cuanto a los tipo de habitación tenemos las siguientes categorías:
+
+- Entire home or apartment
+- Private Room
+- Shared Room
+
+
+```{r warning= FALSE}
+ ggplot(nydf,aes(x = room_type, y = lprice, fill = lprice)) +
+    geom_boxplot() +
+    scale_fill_viridis(discrete = FALSE, alpha=0.6) +
+    geom_jitter(color="black", size=0.4, alpha=0.9) +
+    theme_ipsum() +
+    theme(
+      legend.position="none",
+      plot.title = element_text(size=11)
+    ) +
+    ggtitle("Box plot log.price por tipo de habitación",subtitle=) + xlab("")
+
+```
+
+### Relación entre el logaritmo del precio y el número de comentarios en la web
+
+```{r}
+ggplot(nydf, aes(number_of_reviews, lprice)) +
+  th + theme(axis.title = element_text(), axis.title.x = element_text()) +
+  geom_point(aes(size = lprice), alpha = 0.05, color = "slateblue") +
+  xlab("Numero de cometarios") +
+  ylab("logaritmo del precio") +
+  ggtitle("Relación entre precio y número de comentarios",
+          subtitle = "Los más caros tienen el menor numero de comentarios (o 0)")
+```
+
+### Número de propiedades  por encima del valor medio del logaritmo del precio
+
+```{r warning= FALSE}
+nydf %>% filter(lprice >= mean(lprice)) %>% group_by(neighbourhood_group, room_type) %>% tally %>% 
+  ggplot(aes(reorder(neighbourhood_group,desc(n)), n, fill = room_type)) +
+  th +
+  xlab(NULL) +
+  ylab("Numero de objetos") +
+  ggtitle("Numero de objetos por encima del precio medio",
+          subtitle = "Propiedades enteras y apartamentos tienen los más altos precios medios") +
+  geom_hline(yintercept = mean(nydf$lprice), color = "purple", linetype = 2) +
+           geom_bar(stat = "identity")
+```
+
+### Mapa de folleto de las distintas áreas de Nueva York
+
+```{r}
+pal <- colorFactor(palette = c("red", "green", "blue", "purple", "yellow"), domain = nydf$neighbourhood_group)
+ 
+ leaflet(data = nydf) %>% addProviderTiles(providers$CartoDB.DarkMatterNoLabels) %>%  addCircleMarkers(~longitude, ~latitude, color = ~pal(neighbourhood_group), weight = 1, radius=1, fillOpacity = 0.1, opacity = 0.1, label = paste("Name:", nydf$name)) %>% 
+     addLegend("bottomright", pal = pal, values = ~neighbourhood_group,
+     title = "Grupo de vecindarios",
+     opacity = 1
+   )
+```
+
+
+
+
